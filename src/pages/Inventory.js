@@ -1,0 +1,298 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { FaPlus } from 'react-icons/fa';
+import { useLocation } from 'react-router-dom';
+import api from '../api/axios';
+
+const Inventory = () => {
+  const [items, setItems] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [mainBranchId, setMainBranchId] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [formData, setFormData] = useState({ branch: '', item: '', quantity: '', price: '' });
+  const [editingItem, setEditingItem] = useState(null);
+  const [search, setSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 5;
+
+  const location = useLocation();
+  const branchQueryId = new URLSearchParams(location.search).get('branch_id');
+
+  const fetchInventory = useCallback(async () => {
+    try {
+      const url = branchQueryId ? `inventory/?branch_id=${branchQueryId}` : 'inventory/';
+      const response = await api.get(url);
+      setItems(response.data);
+    } catch (error) {
+      console.error('Failed to fetch inventory:', error);
+    }
+  }, [branchQueryId]);
+
+  const fetchBranches = useCallback(async () => {
+    try {
+      const response = await api.get('branches/');
+      setBranches(response.data);
+      if (response.data.length > 0) {
+        setMainBranchId(response.data[0].id);
+        if (!branchQueryId) {
+          setFormData((prev) => ({ ...prev, branch: response.data[0].id }));
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch branches:', error);
+    }
+  }, [branchQueryId]);
+
+  const fetchItems = useCallback(async () => {
+    try {
+      const response = await api.get('items/');
+      setProducts(response.data);
+    } catch (error) {
+      console.error('Failed to fetch items:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInventory();
+    fetchBranches();
+    fetchItems();
+
+    if (branchQueryId) {
+      setFormData((prev) => ({ ...prev, branch: branchQueryId }));
+    }
+  }, [branchQueryId, fetchInventory, fetchBranches, fetchItems]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    const payload = {
+      item_id: parseInt(formData.item),
+      branch_id: parseInt(formData.branch), // ✅ use selected branch, not mainBranchId
+      quantity: parseInt(formData.quantity),
+      price: parseFloat(formData.price)
+    };
+
+    try {
+      const existing = items.find(
+        (inv) =>
+          inv.item.id === payload.item_id &&
+          inv.branch.id === payload.branch_id
+      );
+
+      if (existing && !editingItem) {
+        const updatedPayload = {
+          ...payload,
+          quantity: existing.quantity + payload.quantity
+        };
+        await api.put(`inventory/${existing.id}/`, updatedPayload);
+      } else if (editingItem) {
+        await api.put(`inventory/${editingItem.id}/`, payload);
+      } else {
+        await api.post('inventory/', payload);
+      }
+
+      fetchInventory();
+      setFormData({ branch: mainBranchId || '', item: '', quantity: '', price: '' });
+      setEditingItem(null);
+      setShowModal(false);
+    } catch (error) {
+      console.error('❌ Failed to submit inventory item:', error.response?.data || error.message);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this item?')) return;
+
+    try {
+      await api.delete(`inventory/${id}/`);
+      fetchInventory();
+    } catch (error) {
+      console.error('❌ Failed to delete inventory item:', error.response?.data || error.message);
+    }
+  };
+
+  const filteredItems = useMemo(() => {
+    return items.filter(
+      (inv) =>
+        inv.item.name.toLowerCase().includes(search.toLowerCase()) ||
+        inv.branch.name.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [search, items]);
+
+  const paginatedItems = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredItems.slice(start, start + itemsPerPage);
+  }, [filteredItems, currentPage]);
+
+  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+
+  return (
+    <div className="p-4 sm:p-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-2">
+        <h1 className="text-2xl font-semibold text-gray-700">Inventory</h1>
+        <button
+          onClick={() => {
+            setEditingItem(null);
+            setFormData({ branch: mainBranchId || '', item: '', quantity: '', price: '' });
+            setShowModal(true);
+          }}
+          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          <FaPlus /> Stock In
+        </button>
+      </div>
+
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-4 w-full p-2 border rounded"
+        placeholder="Search by item or branch..."
+      />
+
+      <div className="bg-white shadow rounded-lg overflow-x-auto">
+        <table className="w-full text-sm text-left">
+          <thead className="bg-gray-100 text-gray-700">
+            <tr>
+              <th className="px-4 py-2 whitespace-nowrap">Item Name</th>
+              <th className="px-4 py-2 whitespace-nowrap">Branch</th>
+              <th className="px-4 py-2 whitespace-nowrap">Quantity</th>
+              <th className="px-4 py-2 whitespace-nowrap">Price (KES)</th>
+              <th className="px-4 py-2 whitespace-nowrap">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {paginatedItems.map((inv) => (
+              <tr key={inv.id} className="border-t hover:bg-gray-50">
+                <td className="px-4 py-2 whitespace-nowrap">{inv.item.name}</td>
+                <td className="px-4 py-2 whitespace-nowrap">{inv.branch.name}</td>
+                <td className="px-4 py-2 whitespace-nowrap">{inv.quantity}</td>
+                <td className="px-4 py-2 whitespace-nowrap">
+                  KES {Number(inv.price).toLocaleString()}
+                </td>
+                <td className="px-4 py-2 whitespace-nowrap flex gap-2">
+                  <button
+                    onClick={() => {
+                      setEditingItem(inv);
+                      setFormData({
+                        item: inv.item.id,
+                        branch: inv.branch.id, // ✅ prefill with actual branch of item
+                        quantity: inv.quantity,
+                        price: inv.price
+                      });
+                      setShowModal(true);
+                    }}
+                    className="text-blue-600 hover:underline"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => handleDelete(inv.id)}
+                    className="text-red-600 hover:underline"
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex justify-center gap-2 mt-4 flex-wrap">
+        {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+          <button
+            key={page}
+            onClick={() => setCurrentPage(page)}
+            className={`px-3 py-1 rounded border text-sm font-medium ${
+              page === currentPage ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'
+            }`}
+          >
+            {page}
+          </button>
+        ))}
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+          <form
+            onSubmit={handleSubmit}
+            className="bg-white rounded-lg shadow-md p-6 w-full max-w-md"
+          >
+            <h2 className="text-lg font-semibold mb-4">
+              {editingItem ? 'Edit Inventory' : 'Stock In'}
+            </h2>
+
+            <select
+              value={formData.item}
+              onChange={(e) => setFormData({ ...formData, item: e.target.value })}
+              className="w-full mb-4 border p-2 rounded"
+              required
+            >
+              <option value="">Select Item</option>
+              {products.map((prod) => (
+                <option key={prod.id} value={prod.id}>
+                  {prod.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={formData.branch}
+              onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
+              className="w-full mb-4 border p-2 rounded"
+              required
+            >
+              <option value="">Select Branch</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+
+            <input
+              type="number"
+              value={formData.quantity}
+              onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+              placeholder="Quantity"
+              className="w-full mb-4 border p-2 rounded"
+              required
+            />
+
+            <input
+              type="number"
+              step="0.01"
+              value={formData.price}
+              onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+              placeholder="Price (KES)"
+              className="w-full mb-4 border p-2 rounded"
+              required
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowModal(false);
+                  setEditingItem(null);
+                }}
+                className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+              >
+                {editingItem ? 'Update' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Inventory;
